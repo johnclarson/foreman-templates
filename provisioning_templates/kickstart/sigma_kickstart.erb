@@ -1,0 +1,189 @@
+<%#
+kind: provision
+name: kickstart
+oses:
+- CentOS
+- Fedora
+%>
+<%#
+This template accepts the following parameters:
+- lang: string (default="en_US.UTF-8")
+- selinux-mode: string (default="disabled")
+- keyboard: string (default="us")
+- time-zone: string (default="UTC")
+- http-proxy: string (default="")
+- http-proxy-port: string (default="")
+- ntp-server: string (default="0.fedora.pool.ntp.org")
+- bootloader-append: string (default="nofb quiet splash=quiet")
+- disable-firewall: boolean (default=false)
+%>
+<%
+  rhel_compatible = @host.operatingsystem.family == 'Redhat' && @host.operatingsystem.name != 'Fedora'
+  os_major = @host.operatingsystem.major.to_i
+  realm_compatible = (@host.operatingsystem.name == 'Fedora' && os_major >= 20) || (rhel_compatible && os_major >= 7)
+  # safemode renderer does not support unary negation
+  proxy_uri = host_param('http-proxy') ? "http://#{host_param('http-proxy')}:#{host_param('http-proxy-port')}" : nil
+  proxy_string = proxy_uri ? " --proxy=#{proxy_uri}" : ''
+  section_end = (rhel_compatible && os_major <= 5) ? '' : '%end'
+%>
+
+## Configure installer settings
+install
+<%= @mediapath %><%= proxy_string %>
+lang <%= host_param('lang') || 'en_US.UTF-8' %>
+selinux --<%= host_param('selinux-mode') || host_param('selinux') || 'disabled' %>
+keyboard <%= host_param('keyboard') || 'us' %>
+skipx
+
+## Configure networking
+<% subnet = @host.subnet -%>
+<% if subnet.respond_to?(:dhcp_boot_mode?) -%>
+<% dhcp = subnet.dhcp_boot_mode? && !@static -%>
+<% else -%>
+<% dhcp = !@static -%>
+<% end -%>
+network --bootproto <%= dhcp ? 'dhcp' : "static --ip=#{@host.ip} --netmask=#{subnet.mask} --gateway=#{subnet.gateway} --nameserver=#{[subnet.dns_primary, subnet.dns_secondary].select{ |item| item.present? }.join(',')}" %> --hostname <%= @host %><%= os_major >= 6 ? " --device=#{@host.mac}" : '' -%>
+
+## Configure custom repos
+repo --name=sigma-centos-7-base          --baseurl=http://<%= host_param("yum_host") %>/sigma-centos-7-base
+repo --name=sigma-centos-7-updates       --baseurl=http://<%= host_param("yum_host") %>/sigma-centos-7-updates
+repo --name=sigma-dockerrepo             --baseurl=http://<%= host_param("yum_host") %>/sigma-dockerrepo
+repo --name=sigma-epel                   --baseurl=http://<%= host_param("yum_host") %>/sigma-epel
+repo --name=sigma-puppetlabs-el7         --baseurl=http://<%= host_param("yum_host") %>/sigma-puppetlabs-el7
+repo --name=sigma-sclo-rh-el7            --baseurl=http://<%= host_param("yum_host") %>/sigma-sclo-rh-el7
+repo --name=sigma-sclo-sclo-el7          --baseurl=http://<%= host_param("yum_host") %>/sigma-sclo-sclo-el7
+
+## Configure security settings
+rootpw --iscrypted <%= root_pass %>
+<% if host_param_true?('disable-firewall') -%>
+firewall --disable
+<% else -%>
+firewall --<%= os_major >= 6 ? 'service=' : '' %>ssh
+<% end -%>
+authconfig --useshadow --passalgo=<%= @host.operatingsystem.password_hash || 'sha256' %> --kickstart
+timezone --utc <%= host_param('time-zone') || 'UTC' %>
+services --disabled gpm,sendmail,cups,pcmcia,isdn,rawdevices,hpoj,bluetooth,openibd,avahi-daemon,avahi-dnsconfd,hidd,hplip,pcscd
+
+## Configure IPA
+<% if realm_compatible && @host.info['parameters']['realm'] && @host.realm && @host.realm.realm_type == 'Active Directory' -%>
+# One-time password will be requested at install time. Otherwise, $HOST[OTP] is used as a placeholder value.
+realm join --one-time-password='<%= @host.otp || "$HOST[OTP]" %>' <%= @host.realm %>
+<% end -%>
+
+## Configure drive partitions
+
+bootloader --location=mbr --append="<%= host_param('bootloader-append') || 'nofb quiet splash=quiet' %>" <%= grub_pass %>
+<% if @dynamic -%>
+%include /tmp/diskpart.cfg
+<% else -%>
+<%= @host.diskLayout %>
+<% end -%>
+
+text
+<% if @host.respond_to?(:bootdisk_build?) && @host.bootdisk_build? %>
+reboot --eject
+<% else -%>
+reboot
+<% end -%>
+
+# Accept the End User License Agreement
+eula --agreed
+
+# Configure installation packages and package groups
+%packages
+-*firmware
+-iscsi*
+-fcoe*
+-b43-openfwwf
+-efibootmgr
+-NetworkManager*
+yum
+dhclient
+ntp
+kernel-firmware
+wget
+rsync
+sudo
+puppet-agent
+redhat-lsb-core
+
+@Base
+@Core
+<% if host_param_true?( 'graphical_environment' ) -%>
+@x11
+@gnome-desktop
+@development
+<% end -%>
+<%= section_end -%>
+
+<% if @dynamic -%>
+%pre
+<%= @host.diskLayout %>
+<%= section_end -%>
+<% end -%>
+
+%post --nochroot
+exec < /dev/tty3 > /dev/tty3
+#changing to VT 3 so that we can see whats going on....
+/usr/bin/chvt 3
+(
+cp -va /etc/resolv.conf /mnt/sysimage/etc/resolv.conf
+/usr/bin/chvt 1
+) 2>&1 | tee /mnt/sysimage/root/install.postnochroot.log
+<%= section_end -%>
+
+%post
+logger "Starting anaconda <%= @host %> postinstall"
+exec < /dev/tty3 > /dev/tty3
+#changing to VT 3 so that we can see whats going on....
+/usr/bin/chvt 3
+(
+echo "<%= @host %>" > /etc/hostname
+hostname $( cat /etc/hostname )
+
+<% if @host.subnet.respond_to?(:dhcp_boot_mode?) -%>
+<%= snippet 'Sigma - static_networking_setup' %>
+service network restart
+<% end -%>
+
+# update all the base packages from the updates repository
+rm -f /etc/yum.repos.d/CentOS*
+yum clean all
+curl http://admin-scripts.p1.sigma.dsci/ks/sigma.repo -o /etc/yum.repos.d/sigma.repo
+chmod 0644 /etc/yum.repos.d/sigma.repo
+
+
+#update local time
+echo "updating system time"
+/usr/sbin/ntpdate -sub <%= host_param('ntp-server') || '0.fedora.pool.ntp.org' %>
+/usr/sbin/hwclock --systohc
+
+<% if @host.info['parameters']['realm'] && @host.realm && @host.realm.realm_type == 'FreeIPA' -%>
+<%= snippet 'Sigma - freeipa_register' %>
+<% end -%>
+
+<%= snippet('remote_execution_ssh_keys') %>
+
+<%= snippet 'Sigma - puppet_setup' %>
+
+<%= snippet 'Sigma - sigma_custom_facts' %>
+
+<% if host_param_true?( 'install_yum_updates' ) -%>
+# update all the base packages from the updates repository
+rm -f /etc/yum.repos.d/CentOS*
+yum clean all
+curl http://admin-scripts.p1.sigma.dsci/ks/sigma.repo -o /etc/yum.repos.d/sigma.repo
+chmod 0644 /etc/yum.repos.d/sigma.repo
+yum -t -y update
+rm -f /etc/yum.repos.d/CentOS*
+<% end -%>
+
+sync
+
+# Inform the build system that we are done.
+echo "Informing Foreman that we are built"
+wget -q -O /dev/null --no-check-certificate <%= foreman_url('built') %>
+) 2>&1 | tee /root/install.post.log
+exit 0
+
+<%= section_end -%>

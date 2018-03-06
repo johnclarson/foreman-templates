@@ -1,0 +1,84 @@
+<%#
+kind: user_data
+name: sigma_user_data
+oses:
+- CentOS
+- Fedora
+-%>
+#!/bin/bash
+exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+<%# Add base build yum repos -%>
+<%= snippet 'Sigma - setup_yum' -%>
+
+<% if host_param_true?( 'install_gitlab_server' ) -%>
+<%= snippet 'Sigma - setup_gitlab_yum' -%>
+<% end -%>
+
+<% if host_param_true?( 'install_ipa_server' ) -%>
+<%= snippet 'Sigma - install_ipa_server' -%>
+<% end -%>
+
+<% if host_param_true?( 'install_gitlab_server' ) -%>
+<%= snippet 'Sigma - install_gitlab' -%>
+<% end -%>
+
+<% unless host_param_false?( 'install_yum_updates' ) -%>
+/bin/yum -y update
+<% end -%>
+
+<%# Cloud instances frequently have incorrect hosts data -%>
+<%= snippet 'Sigma - fix_hosts_ec2' -%>
+
+<%# Disable /tmp mounting in memory -%>
+<%= snippet 'Sigma - disable_tmp_mnt' -%>
+
+<%= snippet 'Sigma - puppet_setup' -%>
+<% if ! @freeipa_register_host -%>
+<%= snippet 'Sigma - freeipa_register' -%>
+<% end -%>
+
+
+/sbin/service sshd restart
+
+# UserData still needs wget to mark as finished
+/usr/bin/wget --quiet --output-document=/dev/null --no-check-certificate <%= foreman_url('built') %>
+
+#############################################
+## Create Puppet Fact files to drive configuration after the host is built
+rm -rf /facts
+mkdir -p /facts
+
+
+puppet_role=$( echo "<%= @host.hostgroup %>" | sed -e "s/^.*\///" )
+cat << EOF > /facts/puppet_role.fact
+# Puppet Role and Foreman Hostgroup
+# DO NOT MOTIFY or you will bring down PLAGUES upon yourself, your family, and your coworkers!
+${puppet_role}
+EOF
+
+# Iterate over all of the host params and write them out to custom puppet facts
+<% @host.params.sort.each do |param,value| -%>
+cat > /facts/<%= param %>.fact << EOF
+# Puppet fact populated by provisoining user_data.  DO NOT MODIFY!
+<%= value %>
+EOF
+
+<% end -%>
+
+##############################################
+## Launch Puppet
+systemctl start puppet
+
+sleep 5
+
+while [ -f /opt/puppetlabs/puppet/cache/state/agent_catalog_run.lock ]
+do
+    sleep 3
+    if [ ! -f /opt/puppetlabs/puppet/cache/state/agent_catalog_run.lock ]
+    then
+    reboot
+    fi
+done
+
+

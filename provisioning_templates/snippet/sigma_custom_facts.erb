@@ -1,0 +1,22 @@
+<%#
+kind: snippet
+name: sigma_custom_facts
+%>
+
+mkdir -p /facts
+
+puppet_role=$( echo "<%= @host.hostgroup %>" | sed -e "s/^.*\///" )
+cat << EOF > /facts/puppet_role.fact
+# Puppet Role and Foreman Hostgroup
+# DO NOT MOTIFY or you will bring down PLAGUES upon yourself, your family, and your coworkers!
+${puppet_role}
+EOF
+
+# Iterate over all of the host params and write them out to custom puppet facts
+<% @host.params.sort.each do |param,value| -%>
+cat > /facts/<%= param %>.fact << EOF
+# Puppet fact populated by provisoining user_data.  DO NOT MODIFY!
+<%= value %>
+EOF
+
+<% end -%>

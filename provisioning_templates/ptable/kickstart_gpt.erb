@@ -1,0 +1,20 @@
+<%#
+kind: ptable
+name: kickstart-gpt
+oses:
+- CentOS
+- Fedora
+- RedHat
+%>
+zerombr
+clearpart --all --initlabel --disklabel=gpt
+part /boot --ondisk=sda --size=1000 --fstype=xfs
+part biosboot --ondisk=sda --size=1 --fstype=biosboot
+part pv.1  --ondisk=sda --size=1    --grow
+volgroup vg_os --pesize=4096 pv.1
+
+logvol /               --fstype=xfs  --name=lv_root           --vgname=vg_os   --size=<%= host_param( 'size_mb_lv_root' ) || '100000' %>
+logvol /var            --fstype=xfs  --name=lv_var            --vgname=vg_os   --size=<%= host_param( 'size_mb_lv_var' ) || '100000' %>
+logvol /var/log/audit  --fstype=xfs  --name=lv_var_log_audit  --vgname=vg_os   --size=<%= host_param( 'size_mb_lv_var_log_audit' ) || '10000' %>
+
+

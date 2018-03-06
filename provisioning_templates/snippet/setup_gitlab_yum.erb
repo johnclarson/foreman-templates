@@ -1,0 +1,12 @@
+<%#
+kind: snippet
+name: setup_gitlab_yum
+%>
+<%# simple basic snippet to configure build gitlab yum repo -%>
+cat << EOF > /etc/yum.repos.d/sigma-gitlab.repo
+[sigma-gitlab]
+name=sigma-gitlab
+baseurl=http://<%= host_param("yum_host_stable") %>/sigma-gitlab
+enabled=1
+gpgcheck=0
+EOF

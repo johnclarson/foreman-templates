@@ -1,0 +1,28 @@
+<%#
+kind: snippet
+name: setup_yum
+%>
+<%# simple basic snippet to configure build yum repos -%>
+/bin/yum clean all
+/bin/rm -f /etc/yum.repos.d/*
+cat << EOF > /etc/yum.repos.d/CentOS-base.repo
+[CentOS-base]
+name=CentOS-base
+baseurl=http://<%= host_param("yum_host_stable") %>/sigma-centos-7-base
+enabled=1
+gpgcheck=0
+EOF
+cat << EOF > /etc/yum.repos.d/CentOS-updates.repo
+[CentOS-updates]
+name=CentOS-updates
+baseurl=http://<%= host_param("yum_host_stable") %>/sigma-centos-7-updates
+enabled=1
+gpgcheck=0
+EOF
+cat << EOF > /etc/yum.repos.d/puppetlabs.repo
+[puppetlabs]
+name=puppetlabs
+baseurl=http://<%= host_param("yum_host_stable") %>/sigma-puppetlabs-el7
+enabled=1
+gpgcheck=0
+EOF
